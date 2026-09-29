@@ -4,7 +4,7 @@
 # fails on the first wrong answer (that's scripts/smoke.sh).
 #
 #   DEMO_PASSWORD=... scripts/demo.sh            # press enter between steps
-#   DEMO_PASSWORD=... scripts/demo.sh | tee demo-transcript.txt
+#   DEMO_PASSWORD=... SMOKE=1 scripts/demo.sh | tee demo-transcript.txt   # no pauses
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/lib.sh
@@ -17,7 +17,7 @@ bold=$'\033[1m'; dim=$'\033[2m'; green=$'\033[32m'; red=$'\033[31m'; reset=$'\03
 n=0
 step() { n=$((n + 1)); printf '\n%s%2d. %s%s\n' "$bold" "$n" "$1" "$reset"; }
 say() { printf '    %s%s%s\n' "$dim" "$1" "$reset"; }
-pause() { [[ "$SMOKE" == 1 ]] || { read -rp "    ${dim}(enter)${reset}" _ </dev/tty; }; }
+pause() { [[ "$SMOKE" == 1 ]] || read -rp "    ${dim}(enter)${reset}" _ </dev/tty || true; }
 fail() { printf '%sFAIL (step %d): %s%s\n' "$red" "$n" "$1" "$reset" >&2; exit 1; }
 ok() { printf '    %s✔ %s%s\n' "$green" "$1" "$reset"; }
 

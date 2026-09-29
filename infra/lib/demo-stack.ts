@@ -433,6 +433,50 @@ export class DemoStack extends cdk.Stack {
     );
     dashboard.addWidgets(new cloudwatch.AlarmStatusWidget({ title: 'Alarms', width: 24, alarms }));
 
+    // ---------------------------------------------------------------- Saved Logs Insights queries
+
+    const fnLogs = [apiFn.logGroup, ingestFn.logGroup];
+    new logs.QueryDefinition(this, 'RequestTraceQuery', {
+      queryDefinitionName: 'corro-demo/request-trace',
+      logGroups: [...fnLogs, accessLogs],
+      // Replace REQUEST_ID with an API Gateway request id (from an access log or a client report).
+      queryString: new logs.QueryString({
+        fields: ['@timestamp', '@log', 'span.route', 'span.tenant_id', 'span.outcome', 'fields.status', 'fields.latency_ms', 'fields.message', 'status', 'routeKey'],
+        filterStatements: ['span.api_request_id = "REQUEST_ID" or requestId = "REQUEST_ID"'],
+        sort: '@timestamp asc',
+      }),
+    });
+    new logs.QueryDefinition(this, 'DenialsByTenantQuery', {
+      queryDefinitionName: 'corro-demo/denials-by-tenant',
+      logGroups: fnLogs,
+      queryString: new logs.QueryString({
+        filterStatements: ['span.outcome in ["Denied", "DeniedByIam"] or span.outcome = "rejected"'],
+        statsStatements: ['count(*) as denials by span.tenant_id, span.route, span.channel, span.outcome'],
+        sort: 'denials desc',
+      }),
+    });
+    new logs.QueryDefinition(this, 'ColdStartsQuery', {
+      queryDefinitionName: 'corro-demo/cold-starts',
+      logGroups: fnLogs,
+      queryString: new logs.QueryString({
+        filterStatements: ['type = "platform.report" and ispresent(record.metrics.initDurationMs)'],
+        statsStatements: ['count(*) as cold_starts, avg(record.metrics.initDurationMs) as avg_init_ms, max(record.metrics.initDurationMs) as max_init_ms by @log'],
+      }),
+    });
+    dashboard.addWidgets(
+      new cloudwatch.LogQueryWidget({
+        title: 'Denials by tenant and route',
+        width: 24,
+        logGroupNames: fnLogs.map((g) => g.logGroupName),
+        view: cloudwatch.LogQueryVisualizationType.TABLE,
+        queryLines: [
+          'filter span.outcome in ["Denied", "DeniedByIam"]',
+          'stats count(*) as denials by span.tenant_id, span.route, span.outcome',
+          'sort denials desc',
+        ],
+      }),
+    );
+
     // ---------------------------------------------------------------- Outputs
 
     const out = (id: string, value: string) => new cdk.CfnOutput(this, id, { value });
@@ -470,7 +514,8 @@ export class DemoStack extends cdk.Stack {
       logGroup,
       loggingFormat: lambda.LoggingFormat.JSON,
       applicationLogLevelV2: lambda.ApplicationLogLevel.INFO,
-      systemLogLevelV2: lambda.SystemLogLevel.WARN,
+      // INFO keeps the platform.report records (duration, memory, initDurationMs for cold starts).
+      systemLogLevelV2: lambda.SystemLogLevel.INFO,
       tracing: lambda.Tracing.ACTIVE,
       environment,
     });
