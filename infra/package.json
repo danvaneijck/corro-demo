@@ -1,0 +1,21 @@
+{
+  "name": "corro-demo-infra",
+  "version": "1.0.0",
+  "scripts": {
+    "synth": "cdk synth",
+    "typecheck": "tsc --noEmit"
+  },
+  "type": "commonjs",
+  "private": true,
+  "dependencies": {
+    "aws-cdk-lib": "^2.271.0",
+    "cargo-lambda-cdk": "^0.0.36",
+    "constructs": "^10.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "aws-cdk": "^2.1143.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

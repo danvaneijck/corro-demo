@@ -1,0 +1,16 @@
+# build output
+target/
+node_modules/
+cdk.out/
+
+# local config and secrets (account id, alarm email, demo password)
+.env*
+.envrc
+cdk.context.json
+
+# demo artefacts
+demo-transcript.txt
+
+# private planning notes (personal details, interview prep); a public design doc replaces them
+DESIGN.md
+BUILD_PLAN.md
