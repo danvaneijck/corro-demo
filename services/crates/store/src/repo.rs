@@ -268,8 +268,8 @@ impl InboxRepo {
     /// conversations, then each one's members (8 in flight at a time).
     pub async fn co_members(&self, user: &UserId) -> Result<Vec<Peer>, StoreError> {
         let convs = self.user_conversation_ids(user).await?;
-        let lists: Vec<Vec<Member>> = stream::iter(convs.iter())
-            .map(|c| self.conversation_members(c))
+        let lists: Vec<Vec<Member>> = stream::iter(convs)
+            .map(|c| async move { self.conversation_members(&c).await })
             .buffer_unordered(8)
             .try_collect()
             .await?;

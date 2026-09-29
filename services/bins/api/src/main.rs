@@ -1,15 +1,22 @@
-use lambda_http::{Body, Error, Request, Response, run, service_fn, tracing};
+//! api-fn: the authenticated HTTP API and the web client's static files.
 
-async fn handler(_req: Request) -> Result<Response<Body>, Error> {
-    let resp = Response::builder()
-        .status(200)
-        .header("content-type", "application/json")
-        .body(Body::from(r#"{"service":"api","status":"ok"}"#))?;
-    Ok(resp)
-}
+mod app;
+mod handlers;
+mod reply;
+mod routes;
+mod web;
+
+use std::sync::Arc;
+
+use lambda_http::{Error, run, service_fn, tracing};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing::init_default_subscriber();
-    run(service_fn(handler)).await
+    let state = Arc::new(app::State::from_env().await?);
+    run(service_fn(move |req| {
+        let state = Arc::clone(&state);
+        async move { app::handle(&state, req).await }
+    }))
+    .await
 }
