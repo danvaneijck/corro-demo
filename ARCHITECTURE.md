@@ -40,7 +40,7 @@ flowchart LR
     JWT["JWT authoriser<br/>(Cognito issuer + audience)"]
     R1["/me /conversations /messages<br/>/people /search /audit /debug/probe"]
     R0["/ /app.js /style.css /config.json<br/>(public, static)"]
-    R2["POST /inbound/{channel}<br/>(no JWT; HMAC in Lambda)"]
+    R2["POST /inbound/{channel}<br/>(no JWT, then HMAC in Lambda)"]
   end
 
   COG["Cognito user pool<br/>custom:tenant_id (immutable)<br/>custom:role"]
@@ -51,7 +51,7 @@ flowchart LR
   end
 
   STS["STS AssumeRole<br/>session tag tenant_id"]
-  TR["TenantDataRole<br/>LeadingKeys = T#(tag)#*"]
+  TR["TenantDataRole<br/>LeadingKeys = T#35;(tag)#35;*"]
 
   subgraph Data
     DDB[("inbox table<br/>single table + GSI1")]
@@ -68,7 +68,7 @@ flowchart LR
   SL & SMS --> R2 --> ING
   API & ING --> STS --> TR --> DDB
   API & ING -->|PutItem only| AUD
-  ING -->|GetItem ROUTE# only| DDB
+  ING -->|GetItem ROUTE#35; only| DDB
   ING --> SM
   API & ING --> CW --> SNS
 ```
@@ -105,10 +105,10 @@ sequenceDiagram
   I->>S: GetSecretValue (cached 5 min)
   I->>I: reject if |now − ts| > 300 s, then HMAC-SHA256 over v0:ts:body, constant-time compare
   I->>I: SlackAdapter::parse → InboundMessage (address, event id, sender, text)
-  I->>D: GetItem ROUTE#slack#{team}#{channel} (cached 60 s)
+  I->>D: GetItem ROUTE#35;slack#35;{team}#35;{channel} (cached 60 s)
   D-->>I: {tenant_id: acme, conversation_id: c_ops}
   I->>T: AssumeRole(TenantDataRole, tag tenant_id=acme) (cached per tenant)
-  I->>D: TransactWrite: Put DEDUP (if not exists), Put MSG#{ulid}, Update META (if exists)
+  I->>D: TransactWrite: Put DEDUP (if not exists), Put MSG#35;{ulid}, Update META (if exists)
   alt provider retry
     D-->>I: ConditionalCheckFailed on DEDUP → nothing written
     I->>A: Put {action: message.ingest, outcome: duplicate}
@@ -138,18 +138,18 @@ sequenceDiagram
   C->>G: GET /conversations/c_ops/messages?limit=20 (Bearer ID token)
   G->>G: verify signature, iss, aud, exp (Cognito JWKS)
   G->>F: event + verified claims
-  F->>F: Principal from claims only (never from path or body); route policy check
+  F->>F: Principal from claims only (never from path or body), then route policy check
   F->>T: AssumeRole(TenantDataRole, tag tenant_id=acme)
-  F->>D: GetItem T#acme#CONV#c_ops / MEMBER#{alice}
+  F->>D: GetItem T#35;acme#35;CONV#35;c_ops / MEMBER#35;{alice}
   alt not a member
     F->>A: Put {outcome: denied, reason: not_member}
     F-->>C: 404 (same as "doesn't exist")
   else member
-    F->>D: Query PK=T#acme#CONV#c_ops, SK begins_with MSG#, newest first, Limit 20
+    F->>D: Query PK=T#35;acme#35;CONV#35;c_ops, SK begins_with MSG#35;, newest first, Limit 20
     F->>A: Put {action: message.list, outcome: allowed, result_count: 20}
     F-->>C: 200 {items, next_cursor}
   end
-  Note over F,D: A key for another tenant (T#globex#…) is rejected by IAM here,<br/>whatever the code does.
+  Note over F,D: A key for another tenant (T#35;globex#35;…) is rejected by IAM here,<br/>whatever the code does.
 ```
 
 The pipeline for every authenticated route is the same: claims → principal → role check →
