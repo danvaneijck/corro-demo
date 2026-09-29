@@ -1,15 +1,18 @@
-use lambda_http::{Body, Error, Request, Response, run, service_fn, tracing};
+//! ingest-fn: signed inbound webhooks at `POST /inbound/{channel}`.
 
-async fn handler(_req: Request) -> Result<Response<Body>, Error> {
-    let resp = Response::builder()
-        .status(200)
-        .header("content-type", "application/json")
-        .body(Body::from(r#"{"service":"ingest","status":"ok"}"#))?;
-    Ok(resp)
-}
+mod app;
+
+use std::sync::Arc;
+
+use lambda_http::{Error, run, service_fn, tracing};
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     tracing::init_default_subscriber();
-    run(service_fn(handler)).await
+    let state = Arc::new(app::State::from_env().await?);
+    run(service_fn(move |req| {
+        let state = Arc::clone(&state);
+        async move { app::handle(&state, req).await }
+    }))
+    .await
 }

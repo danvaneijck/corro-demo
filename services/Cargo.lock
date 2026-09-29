@@ -5,6 +5,18 @@ version = 4
 [[package]]
 name = "adapters"
 version = "0.1.0"
+dependencies = [
+ "domain",
+ "form_urlencoded",
+ "hex",
+ "hmac",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror",
+ "time",
+]
 
 [[package]]
 name = "aho-corasick"
@@ -202,6 +214,31 @@ dependencies = [
  "regex-lite",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "aws-sdk-secretsmanager"
+version = "1.119.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f28259db7d655b96a6b5748132a9a780361e908ab2d692f767729a4581033a4b"
+dependencies = [
+ "arc-swap",
+ "aws-credential-types",
+ "aws-runtime",
+ "aws-smithy-async",
+ "aws-smithy-http",
+ "aws-smithy-json",
+ "aws-smithy-observability",
+ "aws-smithy-runtime",
+ "aws-smithy-runtime-api",
+ "aws-smithy-schema",
+ "aws-smithy-types",
+ "aws-types",
+ "bytes",
+ "fastrand",
+ "http",
+ "regex-lite",
+ "tracing",
 ]
 
 [[package]]
@@ -1285,8 +1322,19 @@ dependencies = [
 name = "ingest"
 version = "0.1.0"
 dependencies = [
+ "adapters",
+ "aws-config",
+ "aws-sdk-dynamodb",
+ "aws-sdk-secretsmanager",
+ "domain",
  "lambda_http",
+ "moka",
+ "serde_json",
+ "store",
+ "time",
  "tokio",
+ "tracing",
+ "ulid",
 ]
 
 [[package]]

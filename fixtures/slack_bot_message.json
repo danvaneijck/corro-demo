@@ -1,0 +1,1 @@
+{"type":"event_callback","team_id":"T0ACME","event_id":"Ev08BOT0001","event_time":1790672401,"event":{"type":"message","subtype":"bot_message","channel":"C0OPS","bot_id":"B0DEMO","text":"deploy finished","ts":"1790672401.000200"}}

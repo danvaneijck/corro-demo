@@ -36,6 +36,8 @@ time = { version = "0.3", features = ["formatting", "parsing", "macros", "serde"
 hmac = "0.13"
 sha2 = "0.11"
 subtle = "2.6"
+hex = "0.4"
+form_urlencoded = "1.2"
 base64 = "0.23"
 moka = { version = "0.12", features = ["future"] }
 regex = "1.13"

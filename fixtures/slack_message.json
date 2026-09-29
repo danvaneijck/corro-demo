@@ -1,0 +1,1 @@
+{"type":"event_callback","team_id":"T0ACME","api_app_id":"A0DEMO","event_id":"Ev08MFMKH6","event_time":1790672400,"event":{"type":"message","channel":"C0OPS","user":"U024BE7LH","text":"Heads up: the region B outage is resolved.","ts":"1790672400.000100","client_msg_id":"5f1c0e2a-8f3d-4a0b-9d0e-3a7c1b2d4e5f"}}
