@@ -3,11 +3,19 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
   <title>Unified Inbox</title>
   <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
 </head>
 <body>
-  <main><h1>Unified Inbox</h1><p>The web client arrives in Step 8.</p></main>
-  <script src="/app.js"></script>
+  <div class="banner" role="note">
+    Interview demo with made-up data, reset regularly. Slack and SMS messages arrive from the
+    presenter's terminal. <a href="https://github.com/danvaneijck/corro-demo" rel="noopener">Source</a>
+  </div>
+  <main id="app" aria-live="polite">
+    <p class="muted center">Loading…</p>
+  </main>
+  <noscript><p class="center">This page needs JavaScript.</p></noscript>
 </body>
 </html>
