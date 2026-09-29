@@ -25,6 +25,7 @@ email_for() {
   case "$1" in
     alice|bob|carol) echo "$1@acme.test" ;;
     dave) echo "dave@globex.test" ;;
+    ops) echo "ops@corro.test" ;;
     *) echo "$1" ;;
   esac
 }

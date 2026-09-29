@@ -12,6 +12,8 @@ pub enum Access {
     Member,
     /// A tenant admin (`custom:role = admin`).
     Admin,
+    /// A platform operator (Cognito group `platform-admin`). Content-free cross-tenant counts only.
+    PlatformAdmin,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +26,7 @@ pub enum RouteId {
     Search,
     Audit,
     Probe,
+    PlatformStats,
     WebIndex,
     WebJs,
     WebCss,
@@ -84,6 +87,12 @@ pub const ROUTES: &[RoutePolicy] = &[
         Member,
         Some(Action::IsolationProbe),
     ),
+    route(
+        "GET /platform/stats",
+        PlatformStats,
+        PlatformAdmin,
+        Some(Action::PlatformStats),
+    ),
     route("GET /", WebIndex, Public, None),
     route("GET /app.js", WebJs, Public, None),
     route("GET /style.css", WebCss, Public, None),
@@ -108,6 +117,11 @@ mod tests {
     #[test]
     fn audit_log_is_admin_only() {
         assert_eq!(lookup("GET /audit").unwrap().access, Admin);
+    }
+
+    #[test]
+    fn platform_stats_needs_the_platform_group() {
+        assert_eq!(lookup("GET /platform/stats").unwrap().access, PlatformAdmin);
     }
 
     #[test]

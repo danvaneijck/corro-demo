@@ -69,6 +69,7 @@ pub async fn dispatch(id: RouteId, ctx: &Ctx<'_>) -> HandlerResult {
         RouteId::Search => search(ctx).await,
         RouteId::Audit => audit(ctx).await,
         RouteId::Probe => probe(ctx).await,
+        RouteId::PlatformStats => platform_stats(ctx).await,
         RouteId::WebIndex | RouteId::WebJs | RouteId::WebCss | RouteId::WebConfig => Err(
             ApiError::internal("public route reached the authenticated pipeline"),
         ),
@@ -135,6 +136,13 @@ async fn post_message(ctx: &Ctx<'_>) -> HandlerResult {
         None,
     );
     ctx.repo.append_message(&msg).await?;
+    store::platform::count_message_best_effort(
+        &ctx.state.own,
+        &ctx.state.table,
+        ctx.repo.scope().tenant_id(),
+        Channel::Native,
+    )
+    .await;
     metrics::count("MessagesIngested", &[("channel", Channel::Native.as_str())]);
     Ok(Success::created(json!(msg)).resource(resource))
 }
@@ -232,4 +240,24 @@ async fn probe(ctx: &Ctx<'_>) -> HandlerResult {
         }
         Err(e) => Err(ApiError::from(e).resource(resource)),
     }
+}
+
+/// Content-free message counts per tenant per day, across every tenant. Uses `PlatformReadRole`,
+/// which can only query `PLATFORM#*` keys, so this handler couldn't read a message if it tried.
+async fn platform_stats(ctx: &Ctx<'_>) -> HandlerResult {
+    let days = ctx
+        .query("days")
+        .and_then(|d| d.parse::<u32>().ok())
+        .unwrap_or(7)
+        .clamp(1, 14);
+    let client = ctx.state.platform.client().await?;
+    let stats = store::platform::read_stats(&client, &ctx.state.table, days).await?;
+    let tenants: std::collections::BTreeSet<&str> = stats
+        .iter()
+        .flat_map(|d| d.tenants.iter().map(|t| t.tenant_id.as_str()))
+        .collect();
+    let n = tenants.len();
+    Ok(Success::ok(json!({ "days": stats, "content_free": true }))
+        .resource(Resource::new("platform_stats", format!("{days}d")))
+        .count(n))
 }

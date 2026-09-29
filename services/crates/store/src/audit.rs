@@ -41,6 +41,8 @@ pub enum Action {
     AuditRead,
     #[serde(rename = "isolation.probe")]
     IsolationProbe,
+    #[serde(rename = "platform.stats")]
+    PlatformStats,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

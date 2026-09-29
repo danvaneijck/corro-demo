@@ -40,10 +40,12 @@ webhook() { # webhook <channel> <file>  → sets BODY
 
 load_outputs
 declare -A TOKENS
-for u in alice bob dave; do TOKENS[$u]=$(token_for "$u"); done
+for u in alice bob dave ops; do TOKENS[$u]=$(token_for "$u"); done
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+started_at=$(date -u +%Y-%m-%dT%H:%M:%S)
+audit_day=$(date -u +%Y-%m-%d)   # audit partitions are per UTC day
 printf '%sUnified Inbox demo%s  %s\n' "$bold" "$reset" "$API"
-say "Signed in as alice (acme admin), bob (acme member) and dave (globex admin)."
+say "Signed in as alice (acme admin), bob (acme member), dave (globex admin) and ops (platform operator)."
 
 step "alice lists her conversations"
 api alice GET /conversations
@@ -126,19 +128,32 @@ show '.items[] | "\(.conversation_id)  \(.body_text)"'
 check 'all(.items[]; .conversation_id == "c_ward")' "only globex messages"
 pause
 
-step "alice (admin) reads today's audit trail"
-api alice GET "/audit?limit=12"
-show '.items[] | "\(.ts[11:19])  \(.actor.username // .actor.type)  \(.action)  \(.outcome)\(if .reason then "  (" + .reason + ")" else "" end)"'
+step "alice (admin) reads the audit trail for this run"
+api alice GET "/audit?limit=100&date=$audit_day"
+say "(only records from this terminal run: an open web client adds its own polling records)"
+BODY=$(jq --arg since "$started_at" '.items |= map(select(.ts >= $since and ((.actor.user_agent // "") | startswith("curl"))))' <<<"$BODY")
+show '.items[:14][] | "\(.ts[11:19])  \(.actor.username // .actor.type)  \(.action)  \(.outcome)\(if .reason then "  (" + .reason + ")" else "" end)"'
 check 'any(.items[]; .outcome == "denied_by_iam")' "the probe is recorded as denied_by_iam"
 check 'any(.items[]; .outcome == "duplicate")' "the Slack retry is recorded"
+check 'any(.items[]; .outcome == "denied" and .reason == "not_member")' "the 404 is recorded as a denial"
 pause
 
 step "bob (member) tries to read the audit trail"
 api bob GET /audit
 show
 expect_status 403; ok "403"
-api alice GET "/audit?limit=1"
-show '.items[] | "\(.actor.username)  \(.action)  \(.outcome)  (\(.reason))"'
-check '.items[0].actor.username == "bob@acme.test" and .items[0].outcome == "denied"' "and the attempt itself is audited"
+api alice GET "/audit?limit=50&date=$audit_day"
+BODY=$(jq '.items |= [first(.[] | select(.actor.username == "bob@acme.test" and .action == "audit.read"))]' <<<"$BODY")
+show '.items[] | "\(.ts[11:19])  \(.actor.username)  \(.action)  \(.outcome)  (\(.reason))"'
+check '.items[0].outcome == "denied" and .items[0].reason == "requires_admin"' "and the attempt itself is audited"
+pause
+
+step "The one cross-tenant view: a platform operator sees counts, never content"
+api ops GET "/platform/stats?days=1"
+show '.days[] | .date as $d | .tenants[] | "\($d)  \(.tenant_id)  total \(.total)  \(.messages)"'
+check '[.days[0].tenants[].tenant_id] | (index("acme") != null and index("globex") != null)' "counts for both tenants"
+check '[.. | objects | keys[]] | all(. != "body_text" and . != "sender")' "no message content anywhere in the response"
+api alice GET /platform/stats
+expect_status 403; ok "a tenant admin isn't a platform operator: 403, audited"
 
 printf '\n%sDone.%s\n' "$bold" "$reset"

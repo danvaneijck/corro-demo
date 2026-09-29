@@ -10,6 +10,7 @@ use lambda_http::{Body, Error, Request, RequestExt, Response};
 use search::DdbScanFallback;
 use serde_json::{Map, Value};
 use store::audit::hash_params;
+use store::platform::PlatformCredsProvider;
 use store::{
     Actor, AuditEvent, AuditWriter, InboxRepo, Outcome, RequestInfo, ServiceInfo, StoreError,
     TenantCredsProvider, metrics,
@@ -49,8 +50,29 @@ pub struct WebConfig {
     pub client_id: String,
 }
 
+/// Where the platform-analytics client comes from.
+pub enum Platform {
+    /// Production: `PlatformReadRole`, which may only query `PLATFORM#*` keys.
+    Sts(Box<PlatformCredsProvider>),
+    #[cfg(test)]
+    Fixed(aws_sdk_dynamodb::Client),
+}
+
+impl Platform {
+    pub async fn client(&self) -> Result<aws_sdk_dynamodb::Client, StoreError> {
+        match self {
+            Platform::Sts(p) => p.client().await,
+            #[cfg(test)]
+            Platform::Fixed(c) => Ok(c.clone()),
+        }
+    }
+}
+
 pub struct State {
     pub clients: Clients,
+    pub platform: Platform,
+    /// The function's own role: PutItem on audit, UpdateItem on PLATFORM#STATS#* counters.
+    pub own: aws_sdk_dynamodb::Client,
     pub audit: AuditWriter,
     pub table: String,
     pub audit_table: String,
@@ -73,6 +95,11 @@ impl State {
                 env("TENANT_ROLE_ARN")?,
                 "api",
             ))),
+            platform: Platform::Sts(Box::new(PlatformCredsProvider::new(
+                &config,
+                env("PLATFORM_ROLE_ARN")?,
+            ))),
+            own: aws_sdk_dynamodb::Client::new(&config),
             // The function's own role: PutItem on the audit table, nothing else in DynamoDB.
             audit: AuditWriter::new(
                 aws_sdk_dynamodb::Client::new(&config),
@@ -178,6 +205,10 @@ async fn pipeline(state: &State, req: &Request, m: &Meta) -> Response<Body> {
     let result: Result<Success, ApiError> =
         if policy.access == Access::Admin && !principal.is_admin() {
             Err(ApiError::forbidden("requires_admin"))
+        } else if policy.access == Access::PlatformAdmin
+            && !principal.groups.iter().any(|g| g == "platform-admin")
+        {
+            Err(ApiError::forbidden("requires_platform_admin"))
         } else {
             run_handler(state, req, &principal, policy.id).await
         };
@@ -229,11 +260,10 @@ async fn run_handler(
     id: routes::RouteId,
 ) -> Result<Success, ApiError> {
     let scope = principal.scope();
-    let client = state
-        .clients
-        .client_for(&scope)
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let client = state.clients.client_for(&scope).await.map_err(|e| {
+        tracing::error!(error = %e, "could not get tenant-scoped credentials");
+        ApiError::internal(e.code())
+    })?;
     let ctx = Ctx {
         principal,
         repo: InboxRepo::new(client.clone(), &state.table, scope),

@@ -71,6 +71,16 @@ pub fn route_pk(ch: Channel, addr: &RouteAddress) -> String {
     format!("ROUTE#{ch}#{}", addr.as_str())
 }
 
+/// `PLATFORM#STATS#<day>`: content-free counters, one item per tenant. The only other
+/// non-tenant keys besides `ROUTE#`.
+pub fn platform_stats_pk(day: &str) -> String {
+    format!("PLATFORM#STATS#{day}")
+}
+
+pub fn platform_stats_sk(t: &TenantId) -> String {
+    format!("T#{t}")
+}
+
 /// Audit keys take a tenant id, not a scope: the audit writer uses the function's own role and
 /// records denials for principals that never got a scope.
 pub fn audit_pk(t: &TenantId, day: &str) -> String {

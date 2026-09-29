@@ -60,7 +60,18 @@ const USERS: &[DemoUser] = &[
         tenant: "globex",
         role: "admin",
     },
+    // A platform operator: its own "platform" tenant (no conversations), plus the platform-admin
+    // Cognito group, which is what unlocks the content-free cross-tenant stats.
+    DemoUser {
+        key: "ops",
+        email: "ops@corro.test",
+        name: "Platform Ops",
+        tenant: "platform",
+        role: "member",
+    },
 ];
+
+const PLATFORM_ADMINS: &[&str] = &["ops"];
 
 /// (tenant, conversation id, name, members)
 const CONVERSATIONS: &[(&str, &str, &str, &[&str])] = &[
@@ -383,6 +394,17 @@ async fn main() -> Result<()> {
             u.email, u.tenant, u.role
         );
         subs.insert(u.key, UserId::parse(&sub)?);
+        if PLATFORM_ADMINS.contains(&u.key) {
+            cognito
+                .admin_add_user_to_group()
+                .user_pool_id(&pool)
+                .username(u.email)
+                .group_name("platform-admin")
+                .send()
+                .await
+                .with_context(|| format!("add {} to platform-admin", u.email))?;
+            println!("  {} is in platform-admin", u.email);
+        }
     }
     let uid = |k: &str| {
         subs.get(k)
@@ -475,6 +497,8 @@ async fn main() -> Result<()> {
         InboxRepo::new(ddb.clone(), &table, scope(tenant)?)
             .append_message(&msg)
             .await?;
+        // Same content-free counter the Lambdas keep, so platform stats start from the seed.
+        store::platform::count_message(&ddb, &table, &TenantId::parse(tenant)?, channel).await?;
     }
     println!("{} messages", MESSAGES.len());
     println!("done. Sign in with any seeded email and DEMO_PASSWORD.");

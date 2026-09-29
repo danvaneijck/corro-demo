@@ -67,7 +67,8 @@ pub fn verify(
 ) -> Result<(), SignatureError> {
     let (ts, sig) = ts.zip(sig).ok_or(SignatureError::Missing)?;
     let ts_secs: i64 = ts.parse().map_err(|_| SignatureError::Malformed)?;
-    if (now - ts_secs).abs() > MAX_SKEW_SECS {
+    // abs_diff can't overflow, unlike (now - ts).abs() with an extreme timestamp.
+    if now.abs_diff(ts_secs) > MAX_SKEW_SECS.unsigned_abs() {
         return Err(SignatureError::Stale);
     }
     let given = sig
@@ -125,6 +126,19 @@ mod tests {
             verify(KEY, Some(&future), b"{}", Some(&sig), NOW),
             Err(SignatureError::Stale)
         );
+    }
+
+    #[test]
+    fn rejects_extreme_timestamps_without_overflowing() {
+        for ts in [i64::MIN, i64::MIN + NOW, i64::MAX] {
+            let ts = ts.to_string();
+            let sig = sign(KEY, &ts, b"{}");
+            assert_eq!(
+                verify(KEY, Some(&ts), b"{}", Some(&sig), NOW),
+                Err(SignatureError::Stale),
+                "{ts}"
+            );
+        }
     }
 
     #[test]

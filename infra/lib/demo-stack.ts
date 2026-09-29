@@ -49,10 +49,12 @@ export class DemoStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    // Append-only: nobody, including admins and the stack's own roles, may change or delete a
-    // record. BatchWriteItem and PartiQL writes are authorised as their own actions, so they're
-    // denied too. PutItem stays allowed; the writer uses attribute_not_exists(PK) so it can't
-    // overwrite. TTL expiry is done by the service and isn't affected.
+    // Append-only for the application: no principal may update or delete a record. BatchWriteItem
+    // and PartiQL writes are authorised as their own actions, so they're denied too. PutItem has to
+    // stay allowed, and IAM can't require it to be conditional, so "never overwrite" is enforced by
+    // the writer (attribute_not_exists(PK)), not by IAM. An account admin can still remove this
+    // policy; real immutability is an Object Lock archive (see ARCHITECTURE.md). TTL expiry is done
+    // by the service and isn't affected.
     const audit = new dynamodb.Table(this, 'AuditTable', {
       partitionKey: { name: 'PK', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'SK', type: dynamodb.AttributeType.STRING },
@@ -192,6 +194,30 @@ export class DemoStack extends cdk.Stack {
       }),
     );
 
+    // The one cross-tenant read path, and it's content-free: platform operators get message
+    // counts per tenant. This role can only Query PLATFORM#* keys, so it can't read any tenant's
+    // data. api-fn assumes it only for callers in the platform-admin group.
+    const platformReadRole = new iam.Role(this, 'PlatformReadRole', {
+      description: 'Content-free platform analytics: Query on PLATFORM#* keys only',
+      maxSessionDuration: cdk.Duration.hours(1),
+      assumedBy: new iam.ArnPrincipal(apiRole.roleArn),
+    });
+    platformReadRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'PlatformStatsRead',
+        actions: ['dynamodb:Query'],
+        resources: [inbox.tableArn],
+        conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PLATFORM#*'] } },
+      }),
+    );
+    apiRole.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'AssumePlatformReadRole',
+        actions: ['sts:AssumeRole'],
+        resources: [platformReadRole.roleArn],
+      }),
+    );
+
     // ---------------------------------------------------------------- 6. Function-role grants
 
     for (const role of [apiRole, ingestRole]) {
@@ -207,6 +233,15 @@ export class DemoStack extends cdk.Stack {
           sid: 'AuditAppend',
           actions: ['dynamodb:PutItem'],
           resources: [audit.tableArn],
+        }),
+      );
+      // Content-free counters for platform stats (ADD msgs_<channel> 1).
+      role.addToPolicy(
+        new iam.PolicyStatement({
+          sid: 'PlatformCounters',
+          actions: ['dynamodb:UpdateItem'],
+          resources: [inbox.tableArn],
+          conditions: { 'ForAllValues:StringLike': { 'dynamodb:LeadingKeys': ['PLATFORM#STATS#*'] } },
         }),
       );
     }
@@ -236,6 +271,7 @@ export class DemoStack extends cdk.Stack {
       ...commonEnv,
       SEARCH_BACKEND: 'ddb',
       ENABLE_ISOLATION_PROBE: 'true',
+      PLATFORM_ROLE_ARN: platformReadRole.roleArn,
       // Public values the web page needs to sign in (served from GET /config.json).
       USER_POOL_ID: userPool.userPoolId,
       USER_POOL_CLIENT_ID: userPoolClient.userPoolClientId,
@@ -304,6 +340,7 @@ export class DemoStack extends cdk.Stack {
       [GET, '/search'],
       [GET, '/audit'],
       [GET, '/debug/probe'],
+      [GET, '/platform/stats'],
     ];
     for (const [method, routePath] of authed) {
       httpApi.addRoutes({ path: routePath, methods: [method], integration: apiIntegration, authorizer: jwt });
@@ -507,6 +544,11 @@ export class DemoStack extends cdk.Stack {
       functionName,
       manifestPath: path.join(__dirname, '..', '..', 'services', 'Cargo.toml'),
       binaryName: bin,
+      bundling: {
+        // Without -p, cargo resolves features for the whole workspace and the seed tool's
+        // operator-only features would be compiled into the Lambda.
+        cargoLambdaFlags: ['-p', bin],
+      },
       architecture: lambda.Architecture.ARM_64,
       memorySize: 256,
       timeout: cdk.Duration.seconds(10),

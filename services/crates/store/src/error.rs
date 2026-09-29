@@ -19,6 +19,19 @@ pub enum StoreError {
 }
 
 impl StoreError {
+    /// A short, stable code for audit records and responses. The detail (which can include ARNs)
+    /// belongs in logs only: tenant admins can read the audit trail.
+    pub fn code(&self) -> &'static str {
+        match self {
+            StoreError::AccessDenied => "iam_access_denied",
+            StoreError::NotFound => "not_found",
+            StoreError::InvalidCursor => "invalid_cursor",
+            StoreError::Dynamo(_) => "dynamodb_error",
+            StoreError::Sts(_) => "sts_error",
+            StoreError::Item(_) => "item_mapping_error",
+        }
+    }
+
     pub fn from_sdk<E, R>(err: SdkError<E, R>) -> Self
     where
         E: ProvideErrorMetadata + std::error::Error + 'static,

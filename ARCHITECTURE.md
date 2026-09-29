@@ -10,11 +10,16 @@ request runs with short-lived STS credentials tagged with the caller's tenant, a
 those credentials touch DynamoDB keys under `T#<tenant>#`. A deliberately unsafe probe endpoint
 skips every application check and reads another tenant's data; DynamoDB refuses it.
 
+Where a cross-tenant view is genuinely needed (platform analytics), it goes through its own
+narrow path: content-free counters, read by a separate role that can't read tenant data, open only
+to a platform-operator group, and audited.
+
 This is a time-boxed demo, so some things are designed but not built. They are marked as such.
 
 - [Components](#components)
 - [Request flows](#request-flows)
 - [Tenant isolation](#tenant-isolation)
+- [The one cross-tenant path: platform analytics](#the-one-cross-tenant-path-platform-analytics)
 - [Data model](#data-model)
 - [Channel adapters](#channel-adapters)
 - [Security](#security)
@@ -52,6 +57,7 @@ flowchart LR
 
   STS["STS AssumeRole<br/>session tag tenant_id"]
   TR["TenantDataRole<br/>LeadingKeys = T#35;(tag)#35;*"]
+  PR["PlatformReadRole<br/>Query PLATFORM#35;* only"]
 
   subgraph Data
     DDB[("inbox table<br/>single table + GSI1")]
@@ -67,6 +73,8 @@ flowchart LR
   COG -. JWKS .-> JWT
   SL & SMS --> R2 --> ING
   API & ING --> STS --> TR --> DDB
+  API -->|platform-admin group only| PR --> DDB
+  API & ING -->|ADD counters<br/>PLATFORM#35;STATS#35;*| DDB
   API & ING -->|PutItem only| AUD
   ING -->|GetItem ROUTE#35; only| DDB
   ING --> SM
@@ -76,8 +84,9 @@ flowchart LR
 **Two Lambdas, split by IAM blast radius rather than by route.**
 
 - `api-fn` serves every authenticated route through an internal router, plus the web client's
-  static files. Its role has no DynamoDB access to the inbox table at all: it can assume the
-  tenant-scoped role, and append to the audit table.
+  static files. Its own role can't read any tenant data: it can assume the tenant-scoped role
+  (and, for platform operators, the platform read role), append to the audit table, and bump
+  content-free counters.
 - `ingest-fn` is unauthenticated at the edge, so it gets the smallest role that works: read the
   webhook secret, read `ROUTE#` records (the one deliberate cross-tenant read, content-free), assume
   the tenant-scoped role, append to the audit table.
@@ -168,8 +177,9 @@ provider ids) is validated to exclude `#` and `*`, so input can't break a key or
 **2. Types.** A `Principal` is built only from verified JWT claims. Repository methods take a
 `TenantScope`, which has no public constructor: it comes from a `Principal`, or for ingest from a
 tenant resolved via a route record. Key strings are built in one module (`store::keys`); handlers
-never format a key. The operator-only constructor used by the seed tool is behind a cargo feature
-that the Lambda binaries don't enable, so it doesn't exist in them.
+never format a key. The operator-only constructor used by the seed tool is behind a cargo feature,
+and each Lambda is built as its own package (`-p api`, `-p ingest`) so the feature isn't
+unified in from the seed tool: the constructor doesn't exist in the deployed binaries.
 
 **3. IAM, per request.** Each request assumes `TenantDataRole` with a `tenant_id` session tag:
 
@@ -208,6 +218,29 @@ caller's scoped client, skipping every application check. DynamoDB returns `Acce
 the API returns `{"blocked_by": "iam"}`, and the audit log records `denied_by_iam`. If the read ever
 succeeded, the endpoint returns a 500, emits an `IsolationBreach` metric and logs an error.
 
+## The one cross-tenant path: platform analytics
+
+Strict isolation still leaves room for operations that genuinely need a view across tenants, such
+as message volume per tenant for capacity planning or billing. That view is built to be narrow:
+
+- **Content-free data.** After each stored message, the function adds one to a counter:
+  `PK = PLATFORM#STATS#<day>`, `SK = T#<tenant>`, attribute `msgs_<channel>`. No ids, senders or
+  text, only counts. The functions' roles may `UpdateItem` keys under `PLATFORM#STATS#*` and nothing
+  else outside a tenant scope.
+- **A separate, read-only role.** `GET /platform/stats` runs under `PlatformReadRole`, whose only
+  permission is `Query` with `dynamodb:LeadingKeys = PLATFORM#*`. It can count messages across
+  every tenant, and it can't read a single one of them, whatever the code asks.
+- **A separate audience.** Only callers in the Cognito group `platform-admin` get the route (a
+  tenant admin gets a 403, which is audited). Platform operators belong to their own `platform`
+  tenant, so their tenant-scoped credentials can't read customer data either.
+- **Audited.** Each view is recorded (`platform.stats`) in the operator's own audit trail.
+- **Best-effort.** A failed counter update is logged and counted (`PlatformCounterFailed`) but
+  never fails a message delivery: analytics must not take the data path down.
+
+At scale the counters would move to a stream consumer (so the request path doesn't pay for them)
+and into a separate analytics store, keeping the same rule: aggregates leave the tenant boundary,
+content doesn't.
+
 ## Data model
 
 Access patterns first, keys second.
@@ -226,6 +259,7 @@ Access patterns first, keys second.
 | AP10 | Users in a tenant | Query | `T#t#TENANT`, `begins_with USER#` |
 | AP12 | A tenant's audit trail for a day | Query (audit table) | `T#t#AUDIT#<yyyy-mm-dd>` |
 | AP13 | What did actor X do? | Query (audit GSI1) | `T#t#ACTOR#<sub>` |
+| AP14 | Message counts per tenant per day (platform) | Query, `PlatformReadRole` | `PLATFORM#STATS#<day>` |
 
 Example items in the `inbox` table:
 
@@ -238,6 +272,7 @@ Example items in the `inbox` table:
 | `T#acme#IDENT#slack#U024BE7LH` | `IDENT` | | | `user_id` |
 | `T#acme#DEDUP#slack#Ev08MFMKH6` | `DEDUP` | | | `message_id`, `expires_at` (7 days) |
 | `ROUTE#slack#T0ACME#C0OPS` | `ROUTE` | | | `tenant_id`, `conversation_id` |
+| `PLATFORM#STATS#2026-09-30` | `T#acme` | | | `msgs_slack`, `msgs_sms`, `msgs_native` (counts only) |
 
 Design notes:
 
@@ -260,7 +295,7 @@ Design notes:
   scale, a stream consumer would materialise `PEER#` edges so it becomes one Query, at the cost of
   write amplification on large conversations.
 
-The `audit` table is separate on purpose: its own IAM (append-only), retention (TTL at 90 days),
+The `audit` table is separate on purpose: its own IAM (the functions can only append), retention (TTL at 90 days),
 backups and, later, archive stream, and a bug in data-path code can't touch it.
 
 ## Channel adapters
@@ -315,6 +350,7 @@ route is audited and that the audit log is admin-only.
 | Role in tenant (`/audit` needs admin) | route table | 403, audited |
 | Conversation membership | point read (AP6), never cached | 404, audited as `denied` |
 | Tenant scope | IAM `LeadingKeys` via session tag | 404, audited as `denied_by_iam` |
+| Platform operator (`/platform/stats`) | Cognito group `platform-admin`, then `PlatformReadRole` | 403, audited |
 
 Error bodies are a short code (`{"error": "not_found"}`) with no internal detail; the detail goes
 to the audit record and the logs.
@@ -329,10 +365,11 @@ Manager, so a payload signed with the Slack key is rejected on the SMS route.
 
 | Principal | Allowed | Not allowed |
 |---|---|---|
-| `api-fn` role | AssumeRole + TagSession on TenantDataRole; PutItem on `audit` | any `inbox` access; Scan; secrets |
-| `ingest-fn` role | GetItem on `inbox` with `LeadingKeys = ROUTE#*`; AssumeRole + TagSession; PutItem on `audit`; read one secret | Query, Scan, any tenant key |
+| `api-fn` role | AssumeRole + TagSession on TenantDataRole; AssumeRole on PlatformReadRole; PutItem on `audit`; UpdateItem on `PLATFORM#STATS#*` | any tenant key in `inbox`; Scan; secrets |
+| `ingest-fn` role | GetItem on `inbox` with `LeadingKeys = ROUTE#*`; AssumeRole + TagSession; PutItem on `audit`; UpdateItem on `PLATFORM#STATS#*`; read one secret | Query, Scan, any tenant key |
 | `TenantDataRole` | Get/BatchGet/Query/Put/Update/ConditionCheck on `inbox` + GSI1, Query on `audit`, all under `T#<tag>#*` | Scan, Delete, anything untagged |
-| everyone | | Update, Delete, BatchWrite or PartiQL writes on `audit` (table resource policy) |
+| `PlatformReadRole` | Query on `inbox` under `PLATFORM#*` | any tenant key, any write |
+| everyone | | Update, Delete, BatchWrite or PartiQL writes on `audit` (table resource policy; see [Audit log](#audit-log) for what it doesn't cover) |
 
 **Web client.** Vanilla JavaScript served by `api-fn` from the API's own origin (no CORS). A strict
 Content-Security-Policy allows scripts and styles from `'self'` only and network calls to the API
@@ -369,17 +406,27 @@ Every read or write of tenant data, and every denial, produces one record:
   `duplicate`. Integrations appear as actor type `integration:slack` or `integration:sms`.
 - Query parameters are stored as a hash, never as values, and message bodies never appear.
 - `record_hash` is SHA-256 over the canonical JSON of the rest of the record.
-- **Append-only.** Records are written with `attribute_not_exists(PK)` by each function's own role,
-  which can only `PutItem`. A table resource policy denies updates and deletes to every principal,
-  including administrators. Tenant admins read their own tenant's trail through the tenant-scoped
-  role, and that read is itself audited.
+- **Append-only for the application.** Each function's own role can only `PutItem` on the audit
+  table, and the writer uses `attribute_not_exists(PK)` so it never overwrites. A table resource
+  policy denies `UpdateItem`, `DeleteItem`, `BatchWriteItem` and PartiQL writes to every principal.
+  Tenant admins read their own tenant's trail through the tenant-scoped role, and that read is
+  itself audited.
+- **What that doesn't prevent.** IAM can't express "PutItem only if the item doesn't exist", so a
+  compromised function role could overwrite a record with an unconditional `PutItem`, and an
+  account administrator could remove the resource policy or delete the table. The `record_hash`
+  makes a silently edited record detectable only once hashes are kept somewhere the writer can't
+  reach. That is what the archive below is for: real immutability comes from S3 Object Lock in a
+  separate account, not from DynamoDB.
 - **Fail-closed.** For reads, the record is written after the data is fetched and before the
   response is sent; if it fails, the caller gets a 500 and no data, and an `AuditWriteFailed`
   metric raises a P1 alarm.
-- **Known gap.** For writes, the message is stored before its audit record. If the audit write
-  fails, the provider receives a 500 and retries, and the retry is audited as a duplicate, so the
-  event still reaches the trail. The complete fix is a single cross-table `TransactWriteItems`
-  covering both.
+- **Known gap.** For writes, the message is stored before its audit record. For webhooks, a failed
+  audit write returns a 500, the provider retries, and the retry is audited as a duplicate, so the
+  event still reaches the trail. Native posts (`POST /conversations/{id}/messages`) have no
+  provider id to de-duplicate on: the message is stored, its audit record is missing, and a client
+  retry creates a second message. The fix for both is one cross-table `TransactWriteItems` that
+  writes the message and its audit record together (plus a client idempotency key for native
+  posts).
 
 Path to compliance: next, stream the audit table to S3 with Object Lock and a hash-chained digest
 per batch (modelled on CloudTrail log-file validation); in production, a separate log-archive
@@ -394,7 +441,7 @@ retention with periodic chain verification.
 - **Metrics** via Embedded Metric Format (log lines, no `PutMetricData` calls): `AuditWritten`,
   `AuditWriteFailed`, `AuthzDenied` (total and by reason), `MessagesIngested` and
   `DuplicateDelivery` (by channel), `WebhookRejected` (by channel and reason), `UnroutedMessage`,
-  `StsCacheMiss`, `IsolationBreach`.
+  `StsCacheMiss`, `IsolationBreach`, `PlatformCounterFailed`.
 - **Alarms → SNS email.** Audit write failure (P1), errors on each Lambda, API 5xx rate above 1%,
   Lambda throttles, DynamoDB throttling on either table, and a spike in authorisation denials
   (possible probing).

@@ -116,7 +116,10 @@ impl From<StoreError> for ApiError {
             ),
             StoreError::NotFound => Self::not_found("not_found"),
             StoreError::InvalidCursor => Self::bad_request("invalid_cursor"),
-            other => Self::internal(other.to_string()),
+            other => {
+                tracing::error!(error = %other, "store error");
+                Self::internal(other.code())
+            }
         }
     }
 }

@@ -8,7 +8,7 @@ conversations, and read back through a JWT-protected API and a small web page.
 The point of the demo is tenant isolation that holds even if the application code gets it wrong.
 Every request runs with STS credentials tagged with the caller's `tenant_id`, and IAM only lets
 those credentials touch DynamoDB keys under `T#<tenant>#`. Every action, including denials, goes to
-an append-only audit table.
+an audit table the application can only append to.
 
 > This is a time-boxed interview demo, not production code. **[ARCHITECTURE.md](ARCHITECTURE.md)**
 > explains the design, the isolation model and the trade-offs, including what was designed but not
@@ -66,7 +66,8 @@ scripts/smoke.sh      # the same, unattended, failing on the first wrong answer
 
 The web client is at the API URL (the `ApiUrl` stack output). Demo accounts: `alice@acme.test`
 (admin), `bob@acme.test`, `carol@acme.test` in tenant `acme`, and `dave@globex.test` (admin) in
-tenant `globex`, all with `DEMO_PASSWORD`.
+tenant `globex`, and `ops@corro.test`, a platform operator who can see content-free message counts
+across tenants (the Platform stats tab) and nothing else. All use `DEMO_PASSWORD`.
 
 To play a provider, `scripts/sign-webhook.sh slack fixtures/slack_message.json` signs a payload
 with the webhook key and posts it. `eval "$(scripts/login.sh alice)"` sets `$TOKEN` and `$API` for

@@ -102,6 +102,8 @@ async fn seed(client: &Client, table: &str) {
 fn state(env: &Env, audit_table: &str) -> State {
     State {
         clients: Clients::Fixed(env.client.clone()),
+        platform: Platform::Fixed(env.client.clone()),
+        own: env.client.clone(),
         audit: AuditWriter::new(
             env.client.clone(),
             audit_table,
@@ -129,6 +131,7 @@ struct Call<'a> {
     id: Option<&'a str>,
     query: Vec<(&'a str, String)>,
     body: Option<Value>,
+    groups: Option<&'a str>,
 }
 
 fn call<'a>(route_key: &'a str, user: Option<(&'a str, &'a str, &'a str)>) -> Call<'a> {
@@ -140,6 +143,7 @@ fn call<'a>(route_key: &'a str, user: Option<(&'a str, &'a str, &'a str)>) -> Ca
         id: None,
         query: vec![],
         body: None,
+        groups: None,
     }
 }
 
@@ -151,6 +155,11 @@ impl<'a> Call<'a> {
     }
     fn q(mut self, k: &'a str, v: impl Into<String>) -> Self {
         self.query.push((k, v.into()));
+        self
+    }
+    /// `cognito:groups` as API Gateway flattens it, e.g. `[platform-admin]`.
+    fn groups(mut self, g: &'a str) -> Self {
+        self.groups = Some(g);
         self
     }
     fn body(mut self, b: Value) -> Self {
@@ -167,9 +176,13 @@ impl<'a> Call<'a> {
             .map(|(k, v)| (k.to_string(), json!(v)))
             .collect();
         let authorizer = self.user.map(|(sub, tenant, role)| {
-            json!({ "jwt": { "claims": {
+            let mut claims = json!({
                 "sub": sub, "custom:tenant_id": tenant, "custom:role": role, "email": format!("{sub}@{tenant}.test"),
-            }, "scopes": null } })
+            });
+            if let Some(g) = self.groups {
+                claims["cognito:groups"] = json!(g);
+            }
+            json!({ "jwt": { "claims": claims, "scopes": null } })
         });
         let event = json!({
             "version": "2.0",
@@ -430,5 +443,65 @@ async fn probe_reports_a_breach_when_nothing_blocks_it() {
             .await
             .0,
         404
+    );
+}
+
+const OPS: Option<(&str, &str, &str)> = Some(("ops", "platform", "member"));
+
+#[tokio::test]
+async fn platform_stats_are_content_free_and_platform_admin_only() {
+    let env = env_or_skip!();
+    let st = state(&env, &env.audit_table);
+    call("POST /conversations/{id}/messages", ALICE)
+        .id("c_ops")
+        .body(json!({ "text": "acme secret one" }))
+        .send(&st)
+        .await;
+    call("POST /conversations/{id}/messages", ALICE)
+        .id("c_ops")
+        .body(json!({ "text": "acme secret two" }))
+        .send(&st)
+        .await;
+    call("POST /conversations/{id}/messages", DAVE)
+        .id("c_ops")
+        .body(json!({ "text": "globex secret" }))
+        .send(&st)
+        .await;
+
+    // A tenant admin isn't a platform admin.
+    let (status, _) = call("GET /platform/stats", ALICE).send(&st).await;
+    assert_eq!(status, 403);
+    let denial = find(&audit_log(&env, "acme").await, "platform.stats", "denied")
+        .cloned()
+        .unwrap();
+    assert_eq!(denial["reason"], "requires_platform_admin");
+
+    let (status, body) = call("GET /platform/stats", OPS)
+        .groups("[platform-admin]")
+        .send(&st)
+        .await;
+    assert_eq!(status, 200);
+    let today = &body["days"][0]["tenants"];
+    let count = |t: &str| {
+        today
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["tenant_id"] == t)
+            .map(|x| x["messages"]["native"].as_u64().unwrap())
+    };
+    assert_eq!((count("acme"), count("globex")), (Some(2), Some(1)));
+    assert!(
+        !body.to_string().contains("secret"),
+        "no message content in platform stats"
+    );
+    // Audited in the operator's own trail.
+    assert!(
+        find(
+            &audit_log(&env, "platform").await,
+            "platform.stats",
+            "allowed"
+        )
+        .is_some()
     );
 }

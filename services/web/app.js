@@ -7,6 +7,7 @@ const DEMO_ACCOUNTS = [
   { email: 'bob@acme.test', label: 'Bob, acme member' },
   { email: 'carol@acme.test', label: 'Carol, acme member' },
   { email: 'dave@globex.test', label: 'Dave, globex admin' },
+  { email: 'ops@corro.test', label: 'Ops, platform operator' },
 ];
 const OTHER_TENANT = { acme: 'globex', globex: 'acme' };
 const FOREIGN_CONVERSATION = { acme: 'c_ward', globex: 'c_ops' };
@@ -206,8 +207,9 @@ function renderShell() {
       h('span', { class: `badge ${me.role === 'admin' ? 'ok' : ''}` }, me.role),
       h('button', { class: 'btn', onclick: () => signOut() }, 'Sign out')));
 
+  const tabs = isPlatformAdmin() ? TABS.concat([['platform', 'Platform stats']]) : TABS;
   const nav = h('nav', { class: 'tabs', role: 'tablist' },
-    TABS.map(([id, label]) => h('button', {
+    tabs.map(([id, label]) => h('button', {
       role: 'tab',
       'aria-selected': state.tab === id ? 'true' : 'false',
       onclick: () => { state.tab = id; renderShell(); },
@@ -218,7 +220,7 @@ function renderShell() {
     h('footer', { class: 'foot' }, 'Rust on AWS Lambda · DynamoDB · Cognito. Every request here is written to the audit log.'));
 
   stopPolling();
-  ({ inbox: viewInbox, people: viewPeople, search: viewSearch, audit: viewAudit, isolation: viewIsolation })[state.tab](body);
+  ({ inbox: viewInbox, people: viewPeople, search: viewSearch, audit: viewAudit, isolation: viewIsolation, platform: viewPlatform })[state.tab](body);
 }
 
 function viewError(err) {
@@ -451,7 +453,7 @@ function viewAudit(root) {
     try {
       const { items } = await api(`/audit?limit=100&date=${encodeURIComponent(date.value)}`);
       out.replaceChildren(
-        h('p', { class: 'muted small' }, `${items.length} most recent records for ${state.me.tenant_id} (UTC day ${date.value}). Append-only: nobody, including admins, can edit or delete them.`),
+        h('p', { class: 'muted small' }, `${items.length} most recent records for ${state.me.tenant_id} (UTC day ${date.value}). The app can only append to this log; the tamper-proof copy belongs in an Object Lock archive.`),
         h('div', { class: 'panel table-wrap' },
           h('table', {},
             h('thead', {}, h('tr', {}, ['Time', 'Actor', 'Action', 'Outcome', 'Reason', 'Resource', 'Record hash'].map((t) => h('th', {}, t)))),
@@ -522,6 +524,38 @@ function viewIsolation(root) {
         (r) => (r.body && r.body.blocked_by === 'iam'
           ? [true, 'Blocked by IAM: DynamoDB itself refused (AccessDeniedException).']
           : [false, 'Not blocked by IAM. That would be an isolation failure.']))));
+}
+
+// ---------------------------------------------------------------- platform stats
+
+function isPlatformAdmin() {
+  return Boolean(state.me && (state.me.groups || []).includes('platform-admin'));
+}
+
+async function viewPlatform(root) {
+  root.replaceChildren(h('p', { class: 'muted' }, 'Loading…'));
+  try {
+    const { days } = await api('/platform/stats?days=7');
+    const channels = ['slack', 'sms', 'native'];
+    const rows = days.flatMap((d) => d.tenants.map((t) => h('tr', {},
+      h('td', {}, d.date),
+      h('td', {}, t.tenant_id),
+      channels.map((c) => h('td', {}, String(t.messages[c] || 0))),
+      h('td', {}, h('strong', {}, String(t.total))))));
+    root.replaceChildren(
+      h('p', { class: 'muted small' },
+        'Message counts per tenant for the last 7 days (UTC). This is the one cross-tenant view, and it is content-free: '
+        + 'it runs under a separate role that can only read PLATFORM# counter items, so it could not read a message even if the code asked. '
+        + 'Only the platform-admin group can open it, and every view is audited.'),
+      h('div', { class: 'panel table-wrap' },
+        h('table', {},
+          h('thead', {}, h('tr', {}, ['Day', 'Tenant', 'Slack', 'SMS', 'App', 'Total'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 6, class: 'muted' }, 'No messages yet.'))))));
+  } catch (err) {
+    root.replaceChildren(err instanceof ApiError && err.status === 403
+      ? h('div', { class: 'panel notice' }, h('h2', {}, 'Platform admins only'), h('p', {}, 'The attempt was audited.'))
+      : viewError(err));
+  }
 }
 
 // ---------------------------------------------------------------- start

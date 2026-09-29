@@ -84,6 +84,8 @@ pub struct State {
     pub clients: Clients,
     pub keys: Keys,
     pub routes: RouteRepo,
+    /// The function's own role: ROUTE# reads, audit appends, PLATFORM#STATS#* counters.
+    pub own: aws_sdk_dynamodb::Client,
     pub audit: AuditWriter,
     pub table: String,
 }
@@ -112,6 +114,7 @@ impl State {
                     .build(),
             },
             routes: RouteRepo::new(own.clone(), &table),
+            own: own.clone(),
             audit: AuditWriter::new(
                 own,
                 env("AUDIT_TABLE")?,
@@ -307,7 +310,7 @@ async fn deliver(
         Err(StoreError::AccessDenied) => {
             (Outcome::DeniedByIam, Some("iam_access_denied".to_owned()))
         }
-        Err(e) => (Outcome::Error, Some(e.to_string())),
+        Err(e) => (Outcome::Error, Some(e.code().to_owned())),
     };
     tracing::Span::current().record("outcome", field::debug(outcome));
 
@@ -339,6 +342,13 @@ async fn deliver(
     match result {
         Ok((AppendOutcome::Appended, id)) => {
             metrics::count("MessagesIngested", &[("channel", ch.as_str())]);
+            store::platform::count_message_best_effort(
+                &state.own,
+                &state.table,
+                &route.tenant_id,
+                ch,
+            )
+            .await;
             reply(
                 StatusCode::OK,
                 json!({ "ok": true, "outcome": "appended", "message_id": id }),
@@ -349,6 +359,16 @@ async fn deliver(
             reply(
                 StatusCode::OK,
                 json!({ "ok": true, "outcome": "duplicate" }),
+            )
+        }
+        // The route points at a conversation that doesn't exist. Retrying can't fix that, so
+        // accept and drop (like an unknown route) instead of making the provider retry forever.
+        Err(StoreError::NotFound) => {
+            metrics::count("UnroutedMessage", &[("channel", ch.as_str())]);
+            tracing::warn!(conversation = %route.conversation_id, "route points at a missing conversation");
+            reply(
+                StatusCode::OK,
+                json!({ "ok": true, "ignored": "conversation_missing" }),
             )
         }
         Err(e) => {

@@ -8,6 +8,7 @@ pub mod cursor;
 mod error;
 pub mod keys;
 pub mod metrics;
+pub mod platform;
 pub mod repo;
 pub mod routes;
 pub mod time_fmt;

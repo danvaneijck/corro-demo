@@ -101,6 +101,7 @@ fn state(env: &Env, audit_table: &str) -> State {
         clients: Clients::Fixed(env.client.clone()),
         keys: Keys::Fixed(ROOT.to_vec()),
         routes: RouteRepo::new(env.client.clone(), &env.table),
+        own: env.client.clone(),
         audit: AuditWriter::new(
             env.client.clone(),
             audit_table,
@@ -311,4 +312,63 @@ async fn audit_failure_returns_500_so_the_provider_retries() {
         "duplicate"
     );
     assert_eq!(audit_log(&env).await[0]["outcome"], "duplicate");
+}
+
+#[tokio::test]
+async fn route_to_a_missing_conversation_is_dropped_not_retried() {
+    let env = env_or_skip!();
+    let admin = Admin::new(env.client.clone(), &env.table);
+    let addr = RouteAddress::new(&[
+        &ExternalId::parse("T0ACME").unwrap(),
+        &ExternalId::parse("C0GONE").unwrap(),
+    ]);
+    admin
+        .put_route(
+            Channel::Slack,
+            &addr,
+            &scope("acme"),
+            &ConvId::parse("c_gone").unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = br#"{"type":"event_callback","team_id":"T0ACME","event_id":"EvGone1","event":{"type":"message","channel":"C0GONE","user":"U1","text":"hi","ts":"1790672400.0001"}}"#;
+    let (status, reply) = send(
+        &state(&env, &env.audit_table),
+        request("slack", body, Sig::Valid),
+    )
+    .await;
+    assert_eq!(
+        (status, reply["ignored"].as_str()),
+        (200, Some("conversation_missing"))
+    );
+    let log = audit_log(&env).await;
+    assert_eq!(
+        (log[0]["outcome"].as_str(), log[0]["reason"].as_str()),
+        (Some("error"), Some("not_found"))
+    );
+}
+
+#[tokio::test]
+async fn new_messages_are_counted_for_platform_stats_duplicates_are_not() {
+    let env = env_or_skip!();
+    let st = state(&env, &env.audit_table);
+    send(&st, request("slack", SLACK, Sig::Valid)).await;
+    send(&st, request("slack", SLACK, Sig::Valid)).await; // duplicate
+    send(&st, request("sms", SMS, Sig::Valid)).await;
+    let stats = store::platform::read_stats(&env.client, &env.table, 1)
+        .await
+        .unwrap();
+    let acme = stats[0]
+        .tenants
+        .iter()
+        .find(|t| t.tenant_id == "acme")
+        .unwrap();
+    assert_eq!(
+        (
+            acme.messages.get("slack"),
+            acme.messages.get("sms"),
+            acme.total
+        ),
+        (Some(&1), Some(&1), 2)
+    );
 }
