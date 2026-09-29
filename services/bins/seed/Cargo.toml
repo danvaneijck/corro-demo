@@ -5,3 +5,14 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+domain.workspace = true
+store = { workspace = true, features = ["admin"] }
+anyhow.workspace = true
+# credentials-login: so `aws login` profiles work when you run the seed locally.
+aws-config = { workspace = true, features = ["credentials-login"] }
+aws-sdk-cloudformation.workspace = true
+aws-sdk-cognitoidentityprovider.workspace = true
+aws-sdk-dynamodb.workspace = true
+time.workspace = true
+tokio.workspace = true
+ulid.workspace = true

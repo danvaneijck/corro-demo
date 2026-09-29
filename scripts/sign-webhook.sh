@@ -29,7 +29,7 @@ if [[ "$file" == "-" ]]; then
 fi
 
 api="${API_URL:-$(output ApiUrl)}"
-root=$(aws secretsmanager get-secret-value --secret-id "$(output WebhookSecretArn)" \
+root=$(aws secretsmanager get-secret-value --secret-id "${SECRET_ARN:-$(output WebhookSecretArn)}" \
   --query SecretString --output text | jq -r .root)
 
 # Per-channel key = HMAC-SHA256(root, "webhook/<channel>"), as in adapters::channel_key.

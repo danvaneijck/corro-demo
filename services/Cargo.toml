@@ -26,6 +26,7 @@ aws-sdk-dynamodb = { version = "1.128", default-features = false, features = ["d
 aws-sdk-sts = { version = "1.118", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-secretsmanager = { version = "1.119", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-cognitoidentityprovider = { version = "1.137", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-cloudformation = { version = "1.129", default-features = false, features = ["default-https-client", "rt-tokio"] }
 serde_dynamo = { version = "4.3", features = ["aws-sdk-dynamodb+1"] }
 
 # general
@@ -51,3 +52,11 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Dev builds: line tables for our crates (enough for backtraces), no debug info for
+# dependencies. Keeps target/ several GB smaller.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
