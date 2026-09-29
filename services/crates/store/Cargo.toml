@@ -5,3 +5,30 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+domain.workspace = true
+aws-config.workspace = true
+aws-sdk-dynamodb.workspace = true
+aws-sdk-sts.workspace = true
+base64.workspace = true
+futures.workspace = true
+moka.workspace = true
+serde.workspace = true
+serde_dynamo.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+aws-sdk-dynamodb.workspace = true
+time.workspace = true
+ulid.workspace = true
+# Enables the `admin` module in this crate's own tests.
+store = { path = ".", features = ["admin"] }
+
+[features]
+# Operator writes (seeding tenants, users, conversations, routes). Seed binary and tests only.
+admin = ["domain/operator"]

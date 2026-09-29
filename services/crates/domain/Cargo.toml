@@ -5,3 +5,13 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+ulid.workspace = true
+
+[features]
+# Enables `TenantScope::for_operator`, for the seed tool and tests. The Lambda binaries are built
+# per binary and never enable it, so the constructor doesn't exist in them.
+operator = []
