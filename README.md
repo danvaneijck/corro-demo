@@ -10,9 +10,9 @@ Every request runs with STS credentials tagged with the caller's `tenant_id`, an
 those credentials touch DynamoDB keys under `T#<tenant>#`. Every action, including denials, goes to
 an append-only audit table.
 
-> This is a time-boxed interview demo, not production code.
-
-**Status:** work in progress.
+> This is a time-boxed interview demo, not production code. **[ARCHITECTURE.md](ARCHITECTURE.md)**
+> explains the design, the isolation model and the trade-offs, including what was designed but not
+> built.
 
 ## Layout
 
@@ -20,6 +20,7 @@ an append-only audit table.
 services/   Rust workspace: domain, store, adapters, search crates; api, ingest, seed binaries
 infra/      CDK app (stack `CorroDemo`)
 scripts/    login, demo, smoke, reset, teardown, webhook signing
+fixtures/   webhook payloads shared by tests and scripts
 ```
 
 ## Prerequisites
@@ -35,7 +36,10 @@ scripts/    login, demo, smoke, reset, teardown, webhook signing
 cd services
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+
+# Repository and request-pipeline tests need DynamoDB Local; without it they're skipped.
+docker run -d --rm -p 8000:8000 amazon/dynamodb-local -jar DynamoDBLocal.jar -inMemory
+DYNAMODB_ENDPOINT=http://localhost:8000 cargo test --workspace
 ```
 
 ## Deploy
@@ -50,6 +54,23 @@ npx cdk deploy CorroDemo -c alarmEmail="$ALARM_EMAIL"
 ```
 
 AWS sends a confirmation email for the alarm topic. Confirm it, or alarms go nowhere.
+
+## Seed and run the demo
+
+```bash
+export DEMO_PASSWORD='<12+ chars, upper, lower, digit, symbol>'   # never committed
+scripts/reset.sh      # Cognito users + demo data (wipes the inbox table first)
+scripts/demo.sh       # narrated walkthrough, press enter between steps
+scripts/smoke.sh      # the same, unattended, failing on the first wrong answer
+```
+
+The web client is at the API URL (the `ApiUrl` stack output). Demo accounts: `alice@acme.test`
+(admin), `bob@acme.test`, `carol@acme.test` in tenant `acme`, and `dave@globex.test` (admin) in
+tenant `globex`, all with `DEMO_PASSWORD`.
+
+To play a provider, `scripts/sign-webhook.sh slack fixtures/slack_message.json` signs a payload
+with the webhook key and posts it. `eval "$(scripts/login.sh alice)"` sets `$TOKEN` and `$API` for
+curl.
 
 ## Tear down
 
