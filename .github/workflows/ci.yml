@@ -65,5 +65,7 @@ jobs:
           cache-dependency-path: infra/package-lock.json
       - run: npm ci
       - run: npx tsc --noEmit
-      - name: cdk synth (no credentials, dummy context)
-        run: npx cdk synth --quiet -c alarmEmail=
+      - name: cdk synth (no credentials, Rust bundling skipped)
+        run: npx cdk synth --quiet
+        env:
+          CDK_SKIP_BUNDLING: '1'
